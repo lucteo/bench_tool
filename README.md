@@ -2,7 +2,7 @@
 
 Bench_tool is a small script that helps you perform small benchmarks for testing the performance of your applications. The applications can be written in any language, provided there is a Makefile that is able to build the application. It measures both the CPU time and the memory usage.
 
-Version: 1.0
+Version: 1.1
 
 Copyright (c) 2015, Lucian Radu Teodorescu.
 
@@ -12,9 +12,9 @@ Copyright (c) 2015, Lucian Radu Teodorescu.
 To use this tool one must carefully arrange the tests/programs in a specified folder structure, providing enough information on how the programs should be run. If the proper folder structure is followed, the tool will run smoothly without any additional input from the user.
 
 There are three main concepts that the user needs to know when using this tool:
-- **tests**: these are independents sets of things that should be benchmarked in isolation; different tests will not have any connection between them
-- **programs**; the actual executables that will be run in order to do the benchmark measurements; a test typically contains multiple programs
-- **run arguments**: this will contain the list of parameters that need to be applied to the programs when they are executed; a test will typically contain one or more sets of run arguments
+- **tests**: these are independents sets of things that should be benchmarked in isolation; different tests will not have any connection between them; each test will be represented by a directory
+- **programs**; the actual executables that will be run in order to do the benchmark measurements; a test typically contains multiple programs; the list of programs is specified in a file named `programs.in` for each test directory
+- **run arguments**: this will contain the list of parameters that need to be applied to the programs when they are executed; a test will typically contain one or more sets of run arguments; the run arguments are specified in a file named `args.in` for each test directory
 
 ### Folder structure
 
@@ -29,18 +29,16 @@ To use the tool, certain folder structure rules may be followed. Here is a typic
     - results_testB.log
   - **tests**
     - **testA**
-      - run
-        - args1.run
-        - args2.run
+      - args.in
+      - programs.in
       - prog1.c
       - prog1.out
       - prog2.cpp
       - prog2.out
       - Makefile
     - **testB**
-      - run
-        - args1.run
-        - args2.run
+      - args.in
+      - programs.in
       - prog1.c
       - prog1.out
       - prog2.cpp
@@ -55,11 +53,21 @@ The **tests** folder is the folder in which the tests and programs should be pla
 
 The tests in the example folder are `testA` and `testB`. To add a new test, create a new folder inside the `tests` folder.
 
-Each test folder should contain a sub-folder named `run` in which at least one file with the `.run` extension exists. In our example, each test have two such files named `args1.run` and `args2.run`. These files should contain the list of arguments passed when executing the programs. For example, if the `args1.run` and `args2.run` contain the content `60000` and `70000`, each program of from the test will be run twice with the arguments `60000` and `70000`.
+Each test folder should contain at least two files: `programs.in` and `args.in`. The first contains the programs that will be invoked for the test and the latter contains the set of arguments needed.
 
-The programs for each test should be placed directly under the test folder. They do not need to follow a specific convention. To build the programs the bench_tool will invoke `make` command in the test folder, so therefore a `Makefile` file needs to be provided. Each compiled program needs to be executable and have the `.out` extension. In fact, the bench_tool will consider all the files ending in `.out` as being the programs to be run for a particular test.
+Each line of the `programs.in` file will contain a program to be invoked. This does not need to be an executable, it can also be a command line. For example, to invoke a Java program, one can add a line that looks as following: `java -server -Xss15500k -classpath src/main MainProgram`. The format of the file should look like the following:
 
-In conclusion, to create a test, one needs to create a folder for the test, put all the programs in the test folder, create a `Makefile` to compile the programs and provide some `run/???.run` files describing the arguments that need to be applied when running the programs.
+    ./progam1.out
+    ./progam2.out
+    # A comment line starts with '#' (must be first character, no spaces allowed before it)
+    complex command line
+    program_name:command
+
+As seen, from the previous examples one can add comments if the first character of the line is `#`. Also, if the command line becomes too complex one can give names to programs.
+
+Similarly, int the `args.in` file one needs to specify the running arguments of the programs, one set of arguments per line. Comments are also possible with the `#` characters, but names cannot be given to argument sets.
+
+For each test the tool will try to *build* the programs before running them. For this it will invoke a `make` command in the test directory, so therefore a `Makefile` file needs to be provided. Based on the configuration parameters, the tool will typically invoke `make clean` before `make`.
 
 If there is only one test in the benchmark, the user may choose not to create a dedicated test folder, and put the test data (`run` folder, programs and makefile) directly under the main `tests` folder.
 
@@ -97,6 +105,18 @@ After running this command, for each test all the programs will be built and the
 ## Requirements
 
 Python 2.7 is required
+
+## Changes
+
+#### Version 1.1
+- programs to be executed are read from a filename, instead of requiring executables with .out extensions (e.g, no need to create a `.out` file for Python scripts)
+- run arguments are read from a file, one line per set of arguments, instead of reading from multiple files
+- added option to express memory in MB instead of KB
+- bug fixes:
+  - flush the files before executing commands
+  - fixed bug with out of order display of results
+  - better display of results
+
 
 ## License
 

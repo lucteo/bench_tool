@@ -1,0 +1,6 @@
+./for.c.out
+./for_pre.cpp.out
+./for_post.cpp.out
+./while.cpp.out
+./for_ranges.cpp.out
+python for.py

@@ -17,26 +17,35 @@ tmpDir = resultsDir + '/tmp'
 
 tests = []
 
+memDiv = 1024.0*1024.0 if config.dumpMemAsMB else 1024.0
+memUnit = 'MB' if config.dumpMemAsMB else 'KB'
+
 def getFileContents(filename):
     with open(filename) as f:
-        return f.read().rstrip();
+        return f.read().rstrip()
 
 def measureCommand(command, fout):
     resReadPipe, resWritePipe = os.pipe()
     pid = os.fork()
     if pid == 0:
-        # Start executing the command
-        p = subprocess.Popen(command, stderr=subprocess.STDOUT, stdout=fout)
-
-        # Wait until the command is finished, or we reach the timeout
-        timeout = config.testTimeout
-        while p.poll() is None and timeout > 0:
-            time.sleep(1)
-            timeout -= 1
         isTimeout = False
-        if not timeout > 0:
-            p.terminate()
-            isTimeout = True
+        try:
+            # Start executing the command
+            # print "Running: %s" % command
+            command = command.split()
+            p = subprocess.Popen(command, stderr=subprocess.STDOUT, stdout=fout)
+
+            # Wait until the command is finished, or we reach the timeout
+            timeout = config.testTimeout
+            while p.poll() is None and timeout > 0:
+                time.sleep(1)
+                timeout -= 1
+            if not timeout > 0:
+                p.terminate()
+                isTimeout = True
+        except Exception as e:
+            print 'RUN ERROR: %s' % str(e)
+            isTimeout = True            
 
         # Send back the results and quit
         rusage = resource.getrusage(resource.RUSAGE_CHILDREN)
@@ -57,22 +66,12 @@ class Test:
     def __init__(self, dir):
         self.name = os.path.basename(dir)
         self.dir = dir
-        self.runArgs = {}
         self.programs = []
+        self.runArgs = []
         self.results = defaultdict(lambda: [])
-        for f in glob.glob(dir+'/run/*'):
-            if os.path.isfile(f):                
-                runName = os.path.splitext(os.path.basename(f))[0]
-                if runName.startswith('.'):
-                    continue
-                runArgs = getFileContents(f)
-                self.runArgs[runName] = runArgs
-        if ( not self.runArgs ):
-            raise Exception("No run files found in %s" % (dir+'/run'))
-        print "  run arguments for '%s': %s" % (self.name, self.runArgs.keys())
 
     def __repr__(self):
-        return "Test(%s, args=%s, programs=%s)" % (self.name, self.runArgs, self.programs)
+        return "Test(%s, programs=%s, args=%s)" % (self.name, self.programs, self.runArgs)
 
     def compile(self):
         print "  %-20s\t" % self.name,
@@ -86,67 +85,92 @@ class Test:
             res = subprocess.call(['make'], stderr=subprocess.STDOUT, stdout=f)
             if res != 0:
                 raise Exception("Cannot compile the programs; check the log file: %s" % logFilename)
-        # Gather executables
-        for f in glob.glob(self.dir+'/*.out'):
-            if not os.path.isfile(f):
-                print
-                raise Exception("Invalid program file: %s" % f)
-            if not os.access(f, os.X_OK):
-                print
-                raise Exception("Program is not executable: %s" % f)
-            if os.path.splitext(os.path.basename(f))[0].startswith('.'):
-                continue
-            self.programs.append(f)
-        if len(self.programs) > 7:
-            print '%d programs' % len(self.programs)
+
+        # Gather programs; results a list of (name, executable)
+        res = getFileContents('programs.in')
+        progs = res.rstrip().split('\n')
+        progs = filter(lambda p: not p.startswith('#'), progs)
+        self.programs = []
+        for p in progs:
+            # Check if the line is of the form <name>:<executable>
+            colon = p.find(':')
+            if colon >= 0:
+                self.programs.append( (p[0:colon].strip(), p[colon+1:].strip()) )
+            else:
+                name = p;
+                if p.startswith('./'):
+                    name = p[2:]
+                name = name.replace('/', '_')
+
+                self.programs.append( (name, p) )
+
+        # Gather running arguments
+        res = getFileContents('args.in')
+        self.runArgs = res.rstrip().split('\n')
+        self.runArgs = filter(lambda p: not p.startswith('#'), self.runArgs)
+
+        if len(self.programs) > 5:
+            print '%d programs' % len(self.programs),
         else:
-            print [os.path.basename(p) for p in self.programs]
+            print [p[0] for p in self.programs],
+        print " / ",
+        if len(self.runArgs) > 7:
+            print '%d args sets' % len(self.runArgs),
+        else:
+            print self.runArgs
 
     def run(self):
         # Run the programs
         resLogFilename = '%s/results_%s.log' % (resultsDir, self.name)
         with open(resLogFilename, 'w') as flog:
-            for prog in sorted(self.programs):
-                for argsName in sorted(self.runArgs):
+            for prog in self.programs:
+                for args in self.runArgs:
                     for r in range(0, config.numRepeats):
-                        args = self.runArgs[argsName]
-                        progName = os.path.basename(prog)
-                        progNameBase = os.path.splitext(progName)[0]
-                        print "  %d: %s/%s %s:" % (r+1, self.name, progName, args)
-                        print >>flog, "  %d: %s/%s %s:" % (r+1, self.name, progName, args)
-                        logFilename = '%s/%s.%s.%s.%d.run.log' % (tmpDir, self.name, progName, argsName, r+1)
+                        progName = prog[0]
+                        progExe = prog[1]
+                        print "  %s: %s %s (%d)\t\t" % (self.name, progName, args, r+1),
+                        print >>flog, "\n%s: %s %s (%d)" % (self.name, progName, args, r+1)
+                        print >>flog, "  > %s %s" % (progExe, args)
+                        sys.stdout.flush()
+                        flog.flush()
+                        logFilename = '%s/%s.%s %s.%d.run.log' % (tmpDir, self.name, progName, args, r+1)
                         with open(logFilename, 'w') as fout:
                             os.chdir(self.dir)
-                            isTimeout, time, mem = measureCommand([prog, args], fout)
+                            isTimeout, time, mem = measureCommand("%s %s" % (progExe, args), fout)
                             if isTimeout:
-                                print "      TIMEOUT - time: %f, mem: %gKB" % (time, mem/1024)
-                                print >>flog, "      TIMEOUT - time: %f, mem: %gKB" % (time, mem/1024)
+                                print "TIMEOUT - time: %f, mem: %f %s" % (time, mem/memDiv, memUnit)
+                                print >>flog, "TIMEOUT - time: %f, mem: %f %s" % (time, mem/memDiv, memUnit)
                                 time = config.testTimeout + 1
                             else:
-                                print "      time: %f, mem: %gKB" % (time, mem/1024)
-                                print >>flog, "      time: %f, mem: %gKB" % (time, mem/1024)
+                                print "time: %f, mem: %f %s" % (time, mem/memDiv, memUnit)
+                                print >>flog, "time: %f, mem: %f %s" % (time, mem/memDiv, memUnit)
+                            sys.stdout.flush()
+                            flog.flush();
                             self.results[(progName, args)].append((time, mem))
 
             # Average and print the results
             csvFilename = '%s/results_%s.csv' % (resultsDir, self.name)
+            print ""
             print "Results for '%s'" % self.name
+            print >>flog, ""
+            print >>flog, "Test results:"
             with open(csvFilename, 'w') as fout:
-                print '# Program name, args, time (s), time deviation (s), memory (KB), memory deviation (KB)'
-                print >>fout, '# Program name, args, time (s), time deviation (s), memory (KB), memory deviation (KB)'
-                print >>flog, "Test results:"
+                print '# Program name, args, time (s), time deviation (s), memory (%s), memory deviation (%s)' % (memUnit, memUnit)
+                print >>fout, '# Program name, args, time (s), time deviation (s), memory (%s), memory deviation (%s)' % (memUnit, memUnit)
                 for k in sorted(self.results):
                     val = self.results[k]
-                    print >>flog, "%s %s: %s" % (k[0], k[1], val)
+                    print >>flog, "%s %s: %s" % (k[0], k[1], val),
                     if config.ignoreFirstRun:
                         val.pop(0)
                     times, mems = zip(*val)
                     timeAvg = numpy.mean(times)
                     timeStd = numpy.std(times)
-                    memAvg = numpy.mean(mems) / 1024
-                    memStd = numpy.std(mems) / 1024
-                    print '%s, \t%s,\t %f, \t%f, \t%g, \t%g' % (k[0], k[1], timeAvg, timeStd, memAvg, memStd)
-                    print >>fout, '%s, \t%s,\t %f, \t%f, \t%g, \t%g' % (k[0], k[1], timeAvg, timeStd, memAvg, memStd)
-            
+                    memAvg = numpy.mean(mems) / memDiv
+                    memStd = numpy.std(mems) / memDiv
+                    print '%s, \t%s,\t %f, \t%f, \t%f, \t%f' % (k[0], k[1], timeAvg, timeStd, memAvg, memStd)
+                    print >>fout, '%s, \t%s,\t %f, \t%f, \t%f, \t%f' % (k[0], k[1], timeAvg, timeStd, memAvg, memStd)
+                    print >>flog, '\t=> (%f, %f)-(%f, %f)' % (timeAvg, timeStd, memAvg, memStd)
+            print ""
 
 def ensureCleanDir(dir):
     if os.path.isdir(dir):
@@ -169,7 +193,7 @@ def checkDirectories():
 
 
 def gatherTests():
-    if os.path.isdir(testsDir+'/run'):
+    if os.path.isfile(testsDir+'/programs.in'):
         # Don't consider the subdirs; all the data is in the tests folder
         tests.append(Test(testsDir))
     else:
@@ -178,7 +202,7 @@ def gatherTests():
                 if os.path.splitext(os.path.basename(d))[0].startswith('.'):
                     continue
                 tests.append(Test(d))
-    # print '  available tests: %s' % [t.name for t in tests]
+    print '  available tests: %s' % [t.name for t in tests]
 
 
 def main():
